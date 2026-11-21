@@ -65,6 +65,23 @@ CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS audit_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  at TEXT NOT NULL,
+  actor TEXT NOT NULL,
+  action TEXT NOT NULL,
+  window_code TEXT,
+  lease_no TEXT,
+  before_end_min INTEGER,
+  after_end_min INTEGER,
+  detail TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_leases_open
+  ON leases(status, day, end_min);
+CREATE INDEX IF NOT EXISTS idx_leases_window
+  ON leases(window_code, status);
+CREATE INDEX IF NOT EXISTS idx_audit_at
+  ON audit_log(id DESC);
 """
 
 

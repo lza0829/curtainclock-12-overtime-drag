@@ -67,6 +67,15 @@ def seed_if_empty() -> None:
             "INSERT INTO settings(key, value) VALUES('fixture_day', ?)",
             (day,),
         )
+        # 观察钟：默认停在当天开工时刻，拨钟接口可推进以模拟到点。
+        conn.execute(
+            "INSERT INTO settings(key, value) VALUES('clock_day', ?)",
+            (day,),
+        )
+        conn.execute(
+            "INSERT INTO settings(key, value) VALUES('clock_min', ?)",
+            (str(9 * 60),),
+        )
         conn.commit()
     finally:
         conn.close()

@@ -3,7 +3,9 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from app.db import connect, transaction
+from app.db import transaction
+from app.services import clock as clock_svc
+from app.services import lease as lease_svc
 from app.services.ready import readiness
 
 router = APIRouter(tags=["windows"])
@@ -20,21 +22,31 @@ class SessionIn(BaseModel):
     end_min: int
 
 
+def _annotate(conn, row, clock, expired_leases: set[str]) -> dict:
+    item = dict(row)
+    item["readiness"] = readiness(conn, row, clock=clock)
+    # 明确解释「已过 end_min 仍 live」：不是新占用，等扫描/人工关窗收口。
+    item["overdue_live"] = row["code"] in expired_leases
+    return item
+
+
 @router.get("/windows")
 def list_windows():
-    conn = connect()
-    try:
+    with transaction() as conn:
+        clock = clock_svc.read_clock(conn)
+        lease_svc.sweep_expired(conn, clock, actor="read:sweep")
         rows = conn.execute(
             "SELECT * FROM windows ORDER BY day, start_min, code"
         ).fetchall()
-        out = []
-        for r in rows:
-            item = dict(r)
-            item["readiness"] = readiness(conn, r)
-            out.append(item)
-        return out
-    finally:
-        conn.close()
+        expired = {
+            r["window_code"]
+            for r in conn.execute(
+                "SELECT * FROM leases WHERE status='open' AND "
+                "(day < ? OR (day = ? AND end_min <= ?))",
+                (clock["day"], clock["day"], clock["now_min"]),
+            ).fetchall()
+        }
+        return [_annotate(conn, r, clock, expired) for r in rows]
 
 
 @router.post("/windows")
@@ -57,23 +69,31 @@ def create_session(body: SessionIn):
                     body.end_min,
                 ),
             )
+            clock = clock_svc.read_clock(conn)
             row = conn.execute(
                 "SELECT * FROM windows WHERE code=?", (body.code,)
             ).fetchone()
-            return {**dict(row), "readiness": readiness(conn, row)}
+            clock_svc.audit(
+                conn,
+                "window_create",
+                actor="operator",
+                window_code=body.code,
+                detail=f"批窗 {body.day} "
+                f"{clock_svc.fmt_min(body.start_min)}–{clock_svc.fmt_min(body.end_min)}",
+            )
+            return {**dict(row), "readiness": readiness(conn, row, clock=clock)}
     except Exception as e:
         raise HTTPException(400, str(e)) from e
 
 
 @router.get("/windows/{code}/ready")
 def session_ready(code: str):
-    conn = connect()
-    try:
+    with transaction() as conn:
+        clock = clock_svc.read_clock(conn)
+        lease_svc.sweep_expired(conn, clock, actor="read:sweep")
         row = conn.execute(
             "SELECT * FROM windows WHERE code=?", (code,)
         ).fetchone()
         if row is None:
             raise HTTPException(404, "批窗不存在")
-        return readiness(conn, row)
-    finally:
-        conn.close()
+        return readiness(conn, row, clock=clock)

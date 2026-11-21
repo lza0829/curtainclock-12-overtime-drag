@@ -11,13 +11,16 @@ const statusLabel = { draft: "待开窗", live: "占用中", done: "已结束" }
 
 export default function Sessions() {
   const [rows, setRows] = useState([]);
+  const [clock, setClock] = useState(null);
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
 
   async function load() {
     setErr("");
     try {
-      setRows(await api.windows());
+      const [ws, ck] = await Promise.all([api.windows(), api.clock()]);
+      setRows(ws);
+      setClock(ck);
     } catch (e) {
       setErr(e.message);
     }
@@ -32,7 +35,11 @@ export default function Sessions() {
     setErr("");
     try {
       const r = await api.openLease(code);
-      setMsg(`已开窗，租约 ${r.lease_no}；在途租约 ${r.open_leases}`);
+      const swept = (r.swept || []).length;
+      setMsg(
+        `已开窗，租约 ${r.lease_no}；在途租约 ${r.open_leases}` +
+          (swept ? `；开窗前扫描收口 ${swept} 笔` : "")
+      );
       await load();
     } catch (e) {
       setErr(e.message);
@@ -42,7 +49,10 @@ export default function Sessions() {
 
   return (
     <section className="panel">
-      <h2>批窗</h2>
+      <h2>
+        批窗
+        <span className="tag policy">观察钟 {clock?.label || "—"}</span>
+      </h2>
       {msg && <div className="msg">{msg}</div>}
       {err && <div className="msg err">{err}</div>}
       <table>
@@ -58,7 +68,7 @@ export default function Sessions() {
         </thead>
         <tbody>
           {rows.map((r) => (
-            <tr key={r.code}>
+            <tr key={r.code} className={r.overdue_live ? "overdue" : ""}>
               <td>
                 <div>{r.title}</div>
                 <small>{r.code}</small>
@@ -86,11 +96,17 @@ export default function Sessions() {
                 <span className={`tag ${r.status}`}>
                   {statusLabel[r.status] || r.status}
                 </span>
+                {r.overdue_live && (
+                  <div className="tag warn">已过点待收口</div>
+                )}
               </td>
               <td>
                 <button
-                  disabled={r.status !== "draft"}
+                  disabled={r.status !== "draft" || r.readiness?.past_end}
                   onClick={() => openLease(r.code)}
+                  title={
+                    r.readiness?.past_end ? "已过结束时刻，不能开窗" : undefined
+                  }
                 >
                   开窗占用
                 </button>
